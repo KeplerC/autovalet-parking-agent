@@ -10,6 +10,7 @@ import cv2
 from hybrid_a_star.hybrid_a_star import hybrid_a_star_planning as hybrid_astar
 from v2_controller import VehiclePIDController
 from collision_probability import collision_point_rect, collision_probablity
+from pykalman import KalmanFilter
 def kmph_to_mps(speed): return speed/3.6
 def mps_to_kmph(speed): return speed*3.6
 
@@ -355,6 +356,63 @@ class Car():
         self.ego_width = 1.8  # Tesla Model 3 width
         self.ego_length = 4.0  # Tesla Model 3 length
 
+        # Add new attribute to store obstacle history
+        self.obstacle_history = {}  # Dictionary to store history of each obstacle's positions
+
+        # Add Kalman Filter parameters
+        self.time_interval = 0.1  # CARLA simulation timestep
+        self.future_steps = 10    # Number of steps to predict into future
+        self.kalman_filters = {}  # Dictionary to store KF for each obstacle
+        
+    def initialize_kalman_filter(self):
+        return KalmanFilter(
+            transition_matrices=[[1, self.time_interval, 0, 0], 
+                               [0, 1, 0, 0],
+                               [0, 0, 1, self.time_interval],
+                               [0, 0, 0, 1]],  # State transition matrix for x, vx, y, vy
+            observation_matrices=[[1, 0, 0, 0],
+                                [0, 0, 1, 0]],  # Observation matrix for x, y positions
+            initial_state_mean=[0, 0, 0, 0],    # Initial x, vx, y, vy
+            observation_covariance=np.eye(2) * 0.1,  # Observation noise
+            transition_covariance=np.eye(4) * 0.1    # Process noise
+        )
+
+    def predict_future_positions(self, obs_id, current_time):
+        history = self.obstacle_history[obs_id]
+        if len(history) < 2:  # Need at least 2 points for prediction
+            return []
+            
+        # Extract past positions and times
+        times = np.array([h['timestamp'] for h in history])
+        positions = np.array([[h['x'], h['y']] for h in history])
+        
+        # Initialize or get existing Kalman filter
+        if obs_id not in self.kalman_filters:
+            kf = self.initialize_kalman_filter()
+            self.kalman_filters[obs_id] = kf
+        else:
+            kf = self.kalman_filters[obs_id]
+        
+        # Train the Kalman Filter on past data
+        state_means, _ = kf.filter(positions)
+        
+        # Predict future positions
+        current_state = state_means[-1]
+        future_predictions = []
+        
+        for step in range(self.future_steps):
+            future_time = current_time + (step + 1) * self.time_interval
+            current_state = np.dot(kf.transition_matrices, current_state)
+            future_predictions.append({
+                'timestamp': future_time,
+                'x': current_state[0],
+                'y': current_state[2],
+                'width': history[-1]['width'],    # Maintain current dimensions
+                'length': history[-1]['length']
+            })
+            
+        return future_predictions
+
     def check_collision_probability(self, obstacle_state, obstacle_dims):
         """
         Calculate collision probability with an obstacle
@@ -390,26 +448,58 @@ class Car():
         self.cur.angle = self.gnss_sensor.get_heading()
         self.cur = self.cur.offset(-1)
 
-        # Add collision probability calculation for each obstacle
+        current_time = self.gnss_sensor.actor.get_world().get_snapshot().timestamp.elapsed_seconds
         collision_probs = []
-        for obs_bb in self.obs:
+        future_collision_probs = []
+
+        # Track obstacle history and predict future collisions
+        for i, obs_bb in enumerate(self.obs):
             # Convert bounding box to state and dimensions
             obs_center_x = (obs_bb[0] + obs_bb[2]) / 2
             obs_center_y = (obs_bb[1] + obs_bb[3]) / 2
             obs_width = obs_bb[2] - obs_bb[0]
             obs_length = obs_bb[3] - obs_bb[1]
             
-            # Assuming obstacle orientation aligned with x-axis
+            obs_id = f"obstacle_{i}"
+            
+            # Initialize history for new obstacles
+            if obs_id not in self.obstacle_history:
+                self.obstacle_history[obs_id] = []
+            
+            # Add current position to history
+            self.obstacle_history[obs_id].append({
+                'timestamp': current_time,
+                'x': obs_center_x,
+                'y': obs_center_y,
+                'width': obs_width,
+                'length': obs_length
+            })
+            
+            # Current collision probability
             obs_state = [obs_center_x, obs_center_y, 0]
             obs_dims = (obs_width, obs_length)
-            
             prob = self.check_collision_probability(obs_state, obs_dims)
-            print(f"Collision probability with obstacle at ({obs_center_x:.1f}, {obs_center_y:.1f}): {prob:.3f} output_dim {obs_dims}")
             collision_probs.append(prob)
             
-        # if max(collision_probs) > 0.1:  # Threshold for considering collision risk
-        print(f"High collision probability: {max(collision_probs):.3f} with obstacle at ({obs_center_x:.1f}, {obs_center_y:.1f})")
-        self.max_collision_prob = max(collision_probs)
+            # Future collision probabilities
+            future_positions = self.predict_future_positions(obs_id, current_time)
+            for future_pos in future_positions:
+                future_obs_state = [future_pos['x'], future_pos['y'], 0]
+                future_obs_dims = (future_pos['width'], future_pos['length'])
+                future_prob = self.check_collision_probability(future_obs_state, future_obs_dims)
+                future_collision_probs.append(future_prob)
+            
+            print(f"Obstacle {i}: Current collision prob: {prob:.3f}, "
+                  f"Max future collision prob: {max(future_collision_probs) if future_collision_probs else 0:.3f}")
+            
+        current_max_prob = max(collision_probs)
+        future_max_prob = max(future_collision_probs) if future_collision_probs else 0
+        
+        print(f"Current high collision probability: {current_max_prob:.3f}")
+        print(f"Future high collision probability: {future_max_prob:.3f}")
+        
+        self.max_collision_prob = max(current_max_prob, future_max_prob)
+
     def plan(self):
         cur = self.cur
         print(f"cur {cur.x} {cur.y}")

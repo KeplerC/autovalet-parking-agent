@@ -52,7 +52,7 @@ SCENARIOS = [
     (46, [45, 47]),
     (47, [46, 48]),
 ]
-NUM_RANDOM_CARS = 25
+NUM_RANDOM_CARS = 2
 
 def run_scenario(world, destination_parking_spot, parked_spots, ious, recording_file):
     try:
