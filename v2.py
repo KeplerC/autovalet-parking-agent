@@ -9,7 +9,7 @@ from shapely import Polygon
 import cv2
 from hybrid_a_star.hybrid_a_star import hybrid_a_star_planning as hybrid_astar
 from v2_controller import VehiclePIDController
-
+from collision_probability import collision_point_rect, collision_probablity
 def kmph_to_mps(speed): return speed/3.6
 def mps_to_kmph(speed): return speed*3.6
 
@@ -337,11 +337,67 @@ class Car():
         self.ti = 0
         self.mode = Mode.DRIVING
 
+        # Add new attributes for collision detection
+        self.obs_cov = np.identity(2) * 0.04
+        self.ori_var = 2/180 * np.pi
+        self.obs_state_cov = np.identity(3) * 0.04
+        self.obs_state_cov[2,2] = self.ori_var
+        self.ego_width = 1.8  # Tesla Model 3 width
+        self.ego_length = 4.0  # Tesla Model 3 length
+
+    def check_collision_probability(self, obstacle_state, obstacle_dims):
+        """
+        Calculate collision probability with an obstacle
+        obstacle_state: [x, y, theta] of obstacle
+        obstacle_dims: (width, length) of obstacle
+        """
+        ego_state = [self.cur.x, self.cur.y, self.cur.angle]
+        
+        print(ego_state, obstacle_state, self.ego_width, self.ego_length, obstacle_dims)
+        obstacle_col_point, ego_col_point, dist = collision_point_rect(
+            ego_state, 
+            obstacle_state,
+            we=self.ego_width,
+            le=self.ego_length,
+            wo=obstacle_dims[0],
+            lo=obstacle_dims[1]
+        )
+        
+        if dist == -1:
+            return 1.0  # Definite collision
+            
+        col_prob = collision_probablity(
+            np.array(obstacle_col_point), 
+            np.array(ego_col_point),
+            dist,
+            self.obs_cov
+        )        
+        return col_prob
+
     def perceive(self):
         self.cur.x, self.cur.y = self.gnss_sensor.get_location()
         self.cur.speed = self.gnss_sensor.get_speed()
         self.cur.angle = self.gnss_sensor.get_heading()
         self.cur = self.cur.offset(-1)
+
+        # Add collision probability calculation for each obstacle
+        collision_probs = []
+        for obs_bb in self.obs:
+            # Convert bounding box to state and dimensions
+            obs_center_x = (obs_bb[0] + obs_bb[2]) / 2
+            obs_center_y = (obs_bb[1] + obs_bb[3]) / 2
+            obs_width = obs_bb[2] - obs_bb[0]
+            obs_length = obs_bb[3] - obs_bb[1]
+            
+            # Assuming obstacle orientation aligned with x-axis
+            obs_state = [obs_center_x, obs_center_y, 0]
+            obs_dims = (obs_width, obs_length)
+            
+            prob = self.check_collision_probability(obs_state, obs_dims)
+            collision_probs.append(prob)
+            
+        # if max(collision_probs) > 0.1:  # Threshold for considering collision risk
+        print(f"High collision probability: {max(collision_probs):.3f} with obstacle at ({obs_center_x:.1f}, {obs_center_y:.1f})")
 
     def plan(self):
         cur = self.cur
