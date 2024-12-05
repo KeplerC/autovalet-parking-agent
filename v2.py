@@ -195,6 +195,7 @@ class CarlaCar():
         self.has_recorded_segment = False
         self.frames = Queue()
         self.has_collided = False
+        self.max_collision_prob = None
 
         # Add collision sensor
         col_bp = world.get_blueprint_library().find('sensor.other.collision')
@@ -254,6 +255,15 @@ class CarlaCar():
                 data,
                 "IOU: {:.2f}".format(self.iou()),
                 (image.width - 175, image.height - 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                fontScale=1,
+                color=(255, 255, 255),
+                thickness=2
+            )
+            data = cv2.putText(
+                data,
+                "Collision prob: {:.2f}".format(self.car.max_collision_prob),
+                (image.width - 600, image.height - 80),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 fontScale=1,
                 color=(255, 255, 255),
@@ -353,14 +363,14 @@ class Car():
         """
         ego_state = [self.cur.x, self.cur.y, self.cur.angle]
         
-        print(ego_state, obstacle_state, self.ego_width, self.ego_length, obstacle_dims)
+        # print(ego_state, obstacle_state, self.ego_width, self.ego_length, obstacle_dims)
         obstacle_col_point, ego_col_point, dist = collision_point_rect(
             ego_state, 
             obstacle_state,
             we=self.ego_width,
             le=self.ego_length,
-            wo=obstacle_dims[0],
-            lo=obstacle_dims[1]
+            wo=obstacle_dims[1],
+            lo=obstacle_dims[0]
         )
         
         if dist == -1:
@@ -394,11 +404,12 @@ class Car():
             obs_dims = (obs_width, obs_length)
             
             prob = self.check_collision_probability(obs_state, obs_dims)
+            print(f"Collision probability with obstacle at ({obs_center_x:.1f}, {obs_center_y:.1f}): {prob:.3f} output_dim {obs_dims}")
             collision_probs.append(prob)
             
         # if max(collision_probs) > 0.1:  # Threshold for considering collision risk
         print(f"High collision probability: {max(collision_probs):.3f} with obstacle at ({obs_center_x:.1f}, {obs_center_y:.1f})")
-
+        self.max_collision_prob = max(collision_probs)
     def plan(self):
         cur = self.cur
         print(f"cur {cur.x} {cur.y}")

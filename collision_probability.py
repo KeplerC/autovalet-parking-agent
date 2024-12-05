@@ -131,7 +131,7 @@ def collision_point_rect(se, so, we = 1.5, le = 4, wo = 1.4, lo = 4,plot_flag = 
     obs_corners = obs_corners.T
     closest_point_dis = [ [tuple(corner)]+collision_dis_dir(corner,we,le) for corner in obs_corners]
     closest_point_dis = (Sort_List(closest_point_dis))
-#     print('dis:',closest_point_dis[0][2])
+    print('dis:',closest_point_dis[0][2])
     
     
     if plot_flag == 1:
