@@ -6,7 +6,8 @@ from v2_experiment_utils import (
     town04_spawn_ego_vehicle,
     town04_spawn_parked_cars,
     town04_spectator_follow,
-    town04_get_drivable_graph
+    town04_get_drivable_graph,
+    town04_spawn_moving_cars
 )
 
 # For lane waypoint hack
@@ -57,6 +58,9 @@ def run_scenario(world, destination_parking_spot, parked_spots, ious, recording_
     try:
         # load parked cars
         parked_cars, parked_cars_bbs = town04_spawn_parked_cars(world, parked_spots, destination_parking_spot, NUM_RANDOM_CARS)
+        
+        # spawn moving cars
+        moving_cars = town04_spawn_moving_cars(world, num_cars=1, target_speed=5)
 
         # load car
         car = town04_spawn_ego_vehicle(world, destination_parking_spot)
@@ -71,19 +75,52 @@ def run_scenario(world, destination_parking_spot, parked_spots, ious, recording_
         # run simulation
         i = 0
         while not is_done(car):
+            # Update moving cars
+            for moving_car, agent in moving_cars:
+                control = agent.run_step()
+                if control:
+                    control.steering = 0.0
+                    control.steer = 0.0
+                    control.brake = 0.0
+                    print(f'control: {control}')
+                    
+                    moving_car.apply_control(control)
+            
+            # Update dynamic obstacles for the ego vehicle
+            dynamic_obs = []
+            for moving_car, _ in moving_cars:
+                loc = moving_car.get_location()
+                bb = moving_car.bounding_box
+                dynamic_obs.append([
+                    loc.x - bb.extent.x, loc.y - bb.extent.y,
+                    loc.x + bb.extent.x, loc.y + bb.extent.y
+                ])
+            car.car.obs = parked_cars_bbs + dynamic_obs
+            
+            # Check for collision
+            if car.has_collided:
+                print("Trial stopped early due to collision")
+                break
+
             world.tick()
             car.run_step()
             car.process_recording_frames()
-            # town04_spectator_follow(world, car)
 
-        iou = car.iou()
-        ious.append(iou)
-        print(f'IOU: {iou}')
+        # Only record IOU if no collision occurred
+        if not car.has_collided:
+            iou = car.iou()
+            ious.append(iou)
+            print(f'IOU: {iou}')
+        else:
+            print('Trial failed due to collision - no IOU recorded')
+
     finally:
         recording_cam.destroy()
         car.destroy()
         for parked_car in parked_cars:
             parked_car.destroy()
+        for moving_car, agent in moving_cars:
+            moving_car.destroy()
 
 def main():
     try:
@@ -101,9 +138,13 @@ def main():
 
         # run scenarios
         ious = []
+        num_scenarios = 2
         for destination_parking_spot, parked_spots in SCENARIOS:
             print(f'Running scenario: destination={destination_parking_spot}, parked_spots={parked_spots}')
             run_scenario(world, destination_parking_spot, parked_spots, ious, recording_file)
+            num_scenarios -= 1
+            if num_scenarios == 0:
+                break
 
         # graph ious
         plt.clf()

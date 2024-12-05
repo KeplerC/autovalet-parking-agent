@@ -516,7 +516,7 @@ def main():
     if show_animation:  # pragma: no cover
         plt.cla()
         plt.plot(xs, ys, label="final course " + str(modes))
-        print(f"{lengths=}")
+        print(f"(lengths={lengths})")
 
         # plotting
         plot_arrow(start_x, start_y, start_yaw)

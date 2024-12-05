@@ -81,7 +81,7 @@ class TrajectoryPoint():
     def offset(self, sign: int = 1):
         return TrajectoryPoint(self.direction, self.x + 1.6*sign*np.cos(self.angle), self.y + 1.6*sign*np.sin(self.angle), self.speed, self.angle)
 
-def refine_trajectory(trajectory: list[TrajectoryPoint]):
+def refine_trajectory(trajectory):
     if len(trajectory) == 0: return
 
     # find direction changes based on positions
@@ -124,7 +124,7 @@ def refine_trajectory(trajectory: list[TrajectoryPoint]):
             d = trajectory[i-1].distance(trajectory[i])
             trajectory[i].speed = min(trajectory[i].speed, sqrt(trajectory[i+1].speed**2 + 2 * MAX_ACCELERATION * d))
 
-def plan_hybrid_astar(cur: TrajectoryPoint, destination: TrajectoryPoint, obs: list[list[float]]) -> list[TrajectoryPoint]:
+def plan_hybrid_astar(cur: TrajectoryPoint, destination: TrajectoryPoint, obs):
     # use Hybrid A* planner
     initial_conditions = {
         'start': np.array([cur.x, cur.y, cur.angle]),
@@ -194,10 +194,21 @@ class CarlaCar():
         self.recording_file = None
         self.has_recorded_segment = False
         self.frames = Queue()
+        self.has_collided = False
+
+        # Add collision sensor
+        col_bp = world.get_blueprint_library().find('sensor.other.collision')
+        self.collision_sensor = world.spawn_actor(col_bp, carla.Transform(), attach_to=self.actor)
+        self.collision_sensor.listen(lambda event: self._on_collision(event))
 
         self.debug = debug
         if debug:
             self.debug_init(spawn_point, destination)
+
+    def _on_collision(self, event):
+        self.has_collided = True
+        self.car.mode = Mode.FAILED
+        print(f"Collision detected with {event.other_actor.type_id}")
 
     def run_step(self):
         self.actor.apply_control(self.car.run_step())
@@ -271,6 +282,8 @@ class CarlaCar():
             self.world.debug.draw_string(carla.Location(x=loc.x, y=loc.y), 'o', draw_shadow=False, color=color, life_time=1.0, persistent_lines=True)
 
     def destroy(self):
+        if self.collision_sensor:
+            self.collision_sensor.destroy()
         self.actor.destroy()
 
     def iou(self):
@@ -332,6 +345,7 @@ class Car():
 
     def plan(self):
         cur = self.cur
+        print(f"cur {cur.x} {cur.y}")
         destination = self.destination
         distance_to_destination = cur.distance(destination)
         if self.mode == Mode.PARKED or distance_to_destination < DESTINATION_THRESHOLD and self.ti >= len(self.trajectory) - TRAJECTORY_EXTENSION - 1:

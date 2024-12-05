@@ -11,6 +11,7 @@ from parking_position import (
     town04_bound 
 )
 from v2 import CarlaCar, Mode
+from agents.navigation.basic_agent import BasicAgent
 
 HOST = '127.0.0.1'
 PORT = 2000
@@ -26,6 +27,11 @@ PARKED_VEHICLES = [
     'vehicle.bmw.grandtourer',
     'vehicle.chevrolet.impala',
     'vehicle.mini.cooper_s',
+    'vehicle.toyota.prius'
+]
+MOVING_VEHICLES = [
+    'vehicle.tesla.model3',
+    'vehicle.audi.a2',
     'vehicle.toyota.prius'
 ]
 
@@ -102,6 +108,7 @@ def town04_spawn_parked_cars(world, spawn_points, skip, num_random_cars):
             spawn_point.x - npc.bounding_box.extent.x, spawn_point.y - npc.bounding_box.extent.y,
             spawn_point.x + npc.bounding_box.extent.x, spawn_point.y + npc.bounding_box.extent.y
         ])
+        print(f"parked car {i} spawned at {spawn_point}")
 
     for i, loc in enumerate(parking_vehicle_locations_Town04):
         if i == skip or i in spawn_points: continue
@@ -185,3 +192,45 @@ def is_path_drivable(x1, y1, x2, y2, drivable_grid):
     """Checks if the path between two points is within drivable regions."""
     rr, cc = line(y1, x1, y2, x2)  # Generate points on the line between nodes
     return np.all(drivable_grid[rr, cc])  # Check if all points on the line are drivable
+
+def town04_spawn_moving_cars(world, num_cars=1, target_speed=5):
+    """Spawn cars that drive through the parking lot area"""
+    moving_cars = []
+    blueprints = world.get_blueprint_library().filter('vehicle.*.*')
+    blueprints = [bp for bp in blueprints if bp.id in MOVING_VEHICLES]
+    
+    # Define some waypoints for the moving cars to follow
+    # These coordinates should be adjusted based on your parking lot layout
+    
+    path_waypoints = [
+        carla.Location(x=287, y=-x, z=0.3) for x in range(230, 250, 1)
+        # carla.Location(x=285, y=-250, z=0.3),  # End point
+        # Add more waypoints as needed
+    ]
+    
+    for _ in range(num_cars):
+        # Spawn the vehicle
+        spawn_point = carla.Transform(
+            path_waypoints[0],
+            carla.Rotation(yaw=270)  # Adjust yaw based on your needs
+        )
+        
+        npc_bp = random.choice(blueprints)
+        if npc_bp.has_attribute('color'):
+            color = random.choice(npc_bp.get_attribute('color').recommended_values)
+            npc_bp.set_attribute('color', color)
+            
+        npc = world.try_spawn_actor(npc_bp, spawn_point)
+        if npc is None:
+            continue
+        
+        agent = BasicAgent(npc)
+        agent.set_target_speed(target_speed)
+        agent.set_destination(path_waypoints[-1])   
+            
+        
+        # moving_cars.append(npc)
+        moving_cars.append((npc, agent))
+        print(f'spawned moving car {npc.id}')
+        
+    return moving_cars
